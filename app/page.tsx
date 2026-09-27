@@ -18,6 +18,9 @@ interface Registro {
 
 // Lógica de cálculo de tarifa
 function calcularTarifaActual(fechaIngresoStr: string) {
+  if (!fechaIngresoStr) {
+    return { monto: 0, horas: 0, minutos: 0, esGratis: true };
+  }
   const ingreso = new Date(fechaIngresoStr);
   const ahora = new Date();
   const diffMilisegundos = Math.max(0, ahora.getTime() - ingreso.getTime());
@@ -55,27 +58,32 @@ export default function ConsergeriaPage() {
 
   // Obtener registros desde Supabase
   const obtenerRegistros = async () => {
-    const { data, error } = await supabase
-      .from('registros_estacionamiento')
-      .select('*')
-      .order('fecha_ingreso', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('registros_estacionamiento')
+        .select('*')
+        .order('fecha_ingreso', { ascending: false });
 
-    if (!error && data) {
-      setRegistros(data);
+      if (error) {
+        console.error('Error cargando datos:', error.message);
+        return;
+      }
+      if (data) {
+        setRegistros(data);
+      }
+    } catch (err) {
+      console.error('Error inesperado:', err);
     }
   };
 
   useEffect(() => {
-    // Establecer la hora inicial de la sesión
     const ahora = new Date();
     setHoraTurnoInicio(ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
 
     obtenerRegistros();
 
-    // Actualizar tiempos cada 1 minuto
     const timer = setInterval(() => setTick((t) => t + 1), 60000);
 
-    // Escuchar cambios en vivo en Supabase
     const channel = supabase
       .channel('cambios_estacionamiento_ui')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'registros_estacionamiento' }, () => {
@@ -100,12 +108,13 @@ export default function ConsergeriaPage() {
     setCargando(true);
     const nuevoRegistro = {
       patente: patente.toUpperCase().replace(/[^A-Z0-9]/g, ''),
-      nombre_visita: nombre,
-      rut_visita: rut,
+      nombre_visita: nombre || '',
+      rut_visita: rut || '',
       depto_destino: depto,
       fecha_ingreso: new Date().toISOString(),
       estado_pago: 'GRATIS',
-      monto_pagado: 0
+      monto_pagado: 0,
+      metodo_pago: null
     };
 
     const { error } = await supabase.from('registros_estacionamiento').insert([nuevoRegistro]);
@@ -115,14 +124,14 @@ export default function ConsergeriaPage() {
       setNombre('');
       setRut('');
       setDepto('');
-      obtenerRegistros();
+      await obtenerRegistros();
     } else {
-      alert('Error al registrar: ' + error.message);
+      alert('Error al registrar en la base de datos: ' + error.message);
     }
     setCargando(false);
   };
 
-  // Marcar cobro manual (Efectivo o Transferencia)
+  // Marcar cobro manual
   const marcarComoPagado = async (registro: Registro, metodo: 'EFECTIVO' | 'TRANSFERENCIA') => {
     const tarifa = calcularTarifaActual(registro.fecha_ingreso);
     const { error } = await supabase
@@ -135,6 +144,7 @@ export default function ConsergeriaPage() {
       .eq('id', registro.id);
 
     if (!error) obtenerRegistros();
+    else alert('Error actualizando pago: ' + error.message);
   };
 
   // Marcar salida de un vehículo
@@ -145,11 +155,11 @@ export default function ConsergeriaPage() {
       .eq('id', id);
 
     if (!error) obtenerRegistros();
+    else alert('Error al registrar salida: ' + error.message);
   };
 
-  // Reiniciar/Cerrar turno
   const reiniciarTurno = () => {
-    if (confirm('¿Estás seguro de que deseas iniciar un nuevo turno? La hora de inicio se actualizará.')) {
+    if (confirm('¿Estás seguro de que deseas iniciar un nuevo turno?')) {
       const ahora = new Date();
       setHoraTurnoInicio(ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
     }
@@ -157,26 +167,30 @@ export default function ConsergeriaPage() {
 
   // Totales de Dinero
   const totalEfectivo = registros
-    .filter((r) => r.estado_pago === 'PAGADO' && r.metodo_pago === 'EFECTIVO')
+    .filter((r) => r && r.estado_pago === 'PAGADO' && r.metodo_pago === 'EFECTIVO')
     .reduce((acc, r) => acc + (r.monto_pagado || 0), 0);
 
   const totalTransferencias = registros
-    .filter((r) => r.estado_pago === 'PAGADO' && (r.metodo_pago === 'TRANSFERENCIA' || r.metodo_pago === 'WEBPAY' || r.metodo_pago === 'MERCADO_PAGO'))
+    .filter((r) => r && r.estado_pago === 'PAGADO' && (r.metodo_pago === 'TRANSFERENCIA' || r.metodo_pago === 'WEBPAY' || r.metodo_pago === 'MERCADO_PAGO'))
     .reduce((acc, r) => acc + (r.monto_pagado || 0), 0);
 
   const totalRecaudado = totalEfectivo + totalTransferencias;
 
-  // Filtrado de listas según pestaña, término de búsqueda y estado
-  const listaBase = registros.filter((r) => (pestañaActiva === 'ACTIVOS' ? !r.fecha_salida : r.fecha_salida !== null));
+  // Filtrado de listas
+  const listaBase = registros.filter((r) => {
+    if (!r) return false;
+    return pestañaActiva === 'ACTIVOS' ? !r.fecha_salida : Boolean(r.fecha_salida);
+  });
 
   const registrosFiltrados = listaBase.filter((r) => {
+    const term = busqueda.toLowerCase();
     const coincideBusqueda =
-      r.patente.toLowerCase().includes(busqueda.toLowerCase()) ||
-      r.depto_destino.toLowerCase().includes(busqueda.toLowerCase()) ||
-      (r.nombre_visita && r.nombre_visita.toLowerCase().includes(busqueda.toLowerCase()));
+      (r.patente && r.patente.toLowerCase().includes(term)) ||
+      (r.depto_destino && r.depto_destino.toLowerCase().includes(term)) ||
+      (r.nombre_visita && r.nombre_visita.toLowerCase().includes(term));
 
     const tarifa = calcularTarifaActual(r.fecha_ingreso);
-    let estadoReal: 'GRATIS' | 'PENDIENTE' | 'PAGADO' = r.estado_pago;
+    let estadoReal: 'GRATIS' | 'PENDIENTE' | 'PAGADO' = r.estado_pago || 'GRATIS';
     if (r.estado_pago !== 'PAGADO') {
       estadoReal = tarifa.esGratis ? 'GRATIS' : 'PENDIENTE';
     }
@@ -230,7 +244,7 @@ export default function ConsergeriaPage() {
           </div>
         </div>
 
-        {/* Pestañas de Selección */}
+        {/* Pestañas */}
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => setPestañaActiva('ACTIVOS')}
@@ -254,7 +268,7 @@ export default function ConsergeriaPage() {
           </button>
         </div>
 
-        {/* Formulario de Registrar Nuevo Ingreso */}
+        {/* Formulario */}
         {pestañaActiva === 'ACTIVOS' && (
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <h2 className="text-base font-bold text-slate-800 mb-3">Registrar Nuevo Ingreso</h2>
@@ -294,13 +308,13 @@ export default function ConsergeriaPage() {
                 disabled={cargando}
                 className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm"
               >
-                + Ingresar Vehículo
+                {cargando ? 'Guardando...' : '+ Ingresar Vehículo'}
               </button>
             </form>
           </div>
         )}
 
-        {/* Barra de Búsqueda y Filtros */}
+        {/* Búsqueda y Filtros */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 space-y-3">
           <div className="relative">
             <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">🔍</span>
@@ -363,10 +377,12 @@ export default function ConsergeriaPage() {
                     const tarifa = calcularTarifaActual(reg.fecha_ingreso);
                     const estaPagado = reg.estado_pago === 'PAGADO';
                     const requierePago = !tarifa.esGratis && !estaPagado;
-                    const horaLlegada = new Date(reg.fecha_ingreso).toLocaleTimeString('es-CL', {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    });
+                    const horaLlegada = reg.fecha_ingreso
+                      ? new Date(reg.fecha_ingreso).toLocaleTimeString('es-CL', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })
+                      : '--:--';
 
                     return (
                       <tr key={reg.id} className="hover:bg-slate-50/80 transition-colors">
@@ -380,12 +396,12 @@ export default function ConsergeriaPage() {
                           {tarifa.horas}h {tarifa.minutos}m
                         </td>
                         <td className="p-3.5 font-extrabold text-slate-800">
-                          ${estaPagado ? reg.monto_pagado.toLocaleString('es-CL') : tarifa.monto.toLocaleString('es-CL')}
+                          ${estaPagado ? (reg.monto_pagado || 0).toLocaleString('es-CL') : tarifa.monto.toLocaleString('es-CL')}
                         </td>
                         <td className="p-3.5">
                           {estaPagado ? (
                             <span className="inline-block px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-100 text-emerald-800">
-                              🟢 PAGADO ({reg.metodo_pago})
+                              🟢 PAGADO ({reg.metodo_pago || 'GENERAL'})
                             </span>
                           ) : tarifa.esGratis ? (
                             <span className="inline-block px-2.5 py-1 rounded-md text-xs font-bold bg-blue-100 text-blue-800">
