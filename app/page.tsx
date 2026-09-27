@@ -16,7 +16,6 @@ interface Registro {
   metodo_pago?: string | null;
 }
 
-// Lógica de cálculo de tarifa
 function calcularTarifaActual(fechaIngresoStr: string) {
   if (!fechaIngresoStr) {
     return { monto: 0, horas: 0, minutos: 0, esGratis: true };
@@ -32,7 +31,7 @@ function calcularTarifaActual(fechaIngresoStr: string) {
   let monto = 0;
   if (horasTotales > 4) {
     const horasExtras = horasTotales - 4;
-    monto = Math.min(horasExtras * 500, 5000); // $500 por hora extra, tope $5.000
+    monto = Math.min(horasExtras * 500, 5000);
   }
 
   return {
@@ -56,7 +55,6 @@ export default function ConsergeriaPage() {
   const [cargando, setCargando] = useState(false);
   const [, setTick] = useState(0);
 
-  // Obtener registros desde Supabase
   const obtenerRegistros = async () => {
     try {
       const { data, error } = await supabase
@@ -72,13 +70,19 @@ export default function ConsergeriaPage() {
         setRegistros(data);
       }
     } catch (err) {
-      console.error('Error inesperado:', err);
+      console.error('Error de conexión:', err);
     }
   };
 
   useEffect(() => {
-    const ahora = new Date();
-    setHoraTurnoInicio(ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    const horaGuardada = localStorage.getItem('horaTurnoInicio');
+    if (horaGuardada) {
+      setHoraTurnoInicio(horaGuardada);
+    } else {
+      const ahora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      setHoraTurnoInicio(ahora);
+      localStorage.setItem('horaTurnoInicio', ahora);
+    }
 
     obtenerRegistros();
 
@@ -97,10 +101,9 @@ export default function ConsergeriaPage() {
     };
   }, []);
 
-  // Registrar nuevo ingreso
   const registrarIngreso = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patente || !depto) {
+    if (!patente.trim() || !depto.trim()) {
       alert('Ingresa al menos la Patente y el Departamento.');
       return;
     }
@@ -108,13 +111,12 @@ export default function ConsergeriaPage() {
     setCargando(true);
     const nuevoRegistro = {
       patente: patente.toUpperCase().replace(/[^A-Z0-9]/g, ''),
-      nombre_visita: nombre || '',
-      rut_visita: rut || '',
-      depto_destino: depto,
+      nombre_visita: nombre.trim() || 'Sin Nombre',
+      rut_visita: rut.trim() || 'Sin RUT',
+      depto_destino: depto.trim(),
       fecha_ingreso: new Date().toISOString(),
       estado_pago: 'GRATIS',
-      monto_pagado: 0,
-      metodo_pago: null
+      monto_pagado: 0
     };
 
     const { error } = await supabase.from('registros_estacionamiento').insert([nuevoRegistro]);
@@ -126,12 +128,11 @@ export default function ConsergeriaPage() {
       setDepto('');
       await obtenerRegistros();
     } else {
-      alert('Error al registrar en la base de datos: ' + error.message);
+      alert('Error de Supabase: ' + error.message);
     }
     setCargando(false);
   };
 
-  // Marcar cobro manual
   const marcarComoPagado = async (registro: Registro, metodo: 'EFECTIVO' | 'TRANSFERENCIA') => {
     const tarifa = calcularTarifaActual(registro.fecha_ingreso);
     const { error } = await supabase
@@ -144,10 +145,9 @@ export default function ConsergeriaPage() {
       .eq('id', registro.id);
 
     if (!error) obtenerRegistros();
-    else alert('Error actualizando pago: ' + error.message);
+    else alert('Error guardando pago: ' + error.message);
   };
 
-  // Marcar salida de un vehículo
   const marcarSalida = async (id: string) => {
     const { error } = await supabase
       .from('registros_estacionamiento')
@@ -155,17 +155,19 @@ export default function ConsergeriaPage() {
       .eq('id', id);
 
     if (!error) obtenerRegistros();
-    else alert('Error al registrar salida: ' + error.message);
+    else alert('Error marcando salida: ' + error.message);
   };
 
   const reiniciarTurno = () => {
-    if (confirm('¿Estás seguro de que deseas iniciar un nuevo turno?')) {
-      const ahora = new Date();
-      setHoraTurnoInicio(ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    if (confirm('¿Deseas cerrar la sesión / reiniciar el turno actual?')) {
+      const nuevaHora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      setHoraTurnoInicio(nuevaHora);
+      localStorage.setItem('horaTurnoInicio', nuevaHora);
+      window.location.reload();
     }
   };
 
-  // Totales de Dinero
+  // Totales
   const totalEfectivo = registros
     .filter((r) => r && r.estado_pago === 'PAGADO' && r.metodo_pago === 'EFECTIVO')
     .reduce((acc, r) => acc + (r.monto_pagado || 0), 0);
@@ -176,7 +178,6 @@ export default function ConsergeriaPage() {
 
   const totalRecaudado = totalEfectivo + totalTransferencias;
 
-  // Filtrado de listas
   const listaBase = registros.filter((r) => {
     if (!r) return false;
     return pestañaActiva === 'ACTIVOS' ? !r.fecha_salida : Boolean(r.fecha_salida);
@@ -214,9 +215,9 @@ export default function ConsergeriaPage() {
           </div>
           <button
             onClick={reiniciarTurno}
-            className="mt-3 md:mt-0 bg-[#f59e0b] hover:bg-[#d97706] text-white text-xs font-bold py-2.5 px-4 rounded-lg shadow transition-colors flex items-center gap-1.5"
+            className="mt-3 md:mt-0 bg-[#f59e0b] hover:bg-[#d97706] text-white text-xs font-bold py-2.5 px-4 rounded-lg shadow transition-colors flex items-center gap-1.5 cursor-pointer"
           >
-            📋 Cerrar / Iniciar Nuevo Turno
+            📋 Cerrar Sesión / Nuevo Turno
           </button>
         </div>
 
@@ -306,7 +307,7 @@ export default function ConsergeriaPage() {
               <button
                 type="submit"
                 disabled={cargando}
-                className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm"
+                className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
               >
                 {cargando ? 'Guardando...' : '+ Ingresar Vehículo'}
               </button>
@@ -314,7 +315,7 @@ export default function ConsergeriaPage() {
           </div>
         )}
 
-        {/* Búsqueda y Filtros */}
+        {/* Filtros */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 space-y-3">
           <div className="relative">
             <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">🔍</span>
@@ -344,7 +345,7 @@ export default function ConsergeriaPage() {
           </div>
         </div>
 
-        {/* Tabla Principal */}
+        {/* Tabla */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100">
             <h2 className="text-base font-bold text-slate-800">
@@ -420,13 +421,13 @@ export default function ConsergeriaPage() {
                                 <>
                                   <button
                                     onClick={() => marcarComoPagado(reg, 'EFECTIVO')}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
                                   >
                                     Efectivo
                                   </button>
                                   <button
                                     onClick={() => marcarComoPagado(reg, 'TRANSFERENCIA')}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
                                   >
                                     Transf.
                                   </button>
@@ -434,7 +435,7 @@ export default function ConsergeriaPage() {
                               )}
                               <button
                                 onClick={() => marcarSalida(reg.id)}
-                                className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors"
+                                className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
                               >
                                 Dar Salida
                               </button>
