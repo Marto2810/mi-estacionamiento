@@ -3,6 +3,9 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
+// Clave para ingresar al sistema de Conserjería
+const CLAVE_ACCESO = '1234';
+
 interface Registro {
   id: string;
   patente: string;
@@ -43,6 +46,10 @@ function calcularTarifaActual(fechaIngresoStr: string) {
 }
 
 export default function ConsergeriaPage() {
+  const [autenticado, setAutenticado] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [errorPassword, setErrorPassword] = useState('');
+
   const [registros, setRegistros] = useState<Registro[]>([]);
   const [patente, setPatente] = useState('');
   const [nombre, setNombre] = useState('');
@@ -51,9 +58,26 @@ export default function ConsergeriaPage() {
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | 'GRATIS' | 'PENDIENTE' | 'PAGADO'>('TODOS');
   const [pestañaActiva, setPestañaActiva] = useState<'ACTIVOS' | 'HISTORIAL'>('ACTIVOS');
-  const [horaTurnoInicio, setHoraTurnoInicio] = useState('11:14');
+  const [horaTurnoInicio, setHoraTurnoInicio] = useState('');
   const [cargando, setCargando] = useState(false);
   const [, setTick] = useState(0);
+
+  // Verificar si hay sesión activa iniciada
+  useEffect(() => {
+    const sesionActiva = localStorage.getItem('sesion_conserje_activa');
+    if (sesionActiva === 'true') {
+      setAutenticado(true);
+    }
+
+    const horaGuardada = localStorage.getItem('horaTurnoInicio');
+    if (horaGuardada) {
+      setHoraTurnoInicio(horaGuardada);
+    } else {
+      const ahora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      setHoraTurnoInicio(ahora);
+      localStorage.setItem('horaTurnoInicio', ahora);
+    }
+  }, []);
 
   const obtenerRegistros = async () => {
     try {
@@ -75,14 +99,7 @@ export default function ConsergeriaPage() {
   };
 
   useEffect(() => {
-    const horaGuardada = localStorage.getItem('horaTurnoInicio');
-    if (horaGuardada) {
-      setHoraTurnoInicio(horaGuardada);
-    } else {
-      const ahora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-      setHoraTurnoInicio(ahora);
-      localStorage.setItem('horaTurnoInicio', ahora);
-    }
+    if (!autenticado) return;
 
     obtenerRegistros();
 
@@ -99,8 +116,33 @@ export default function ConsergeriaPage() {
       clearInterval(timer);
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [autenticado]);
 
+  // Login
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === CLAVE_ACCESO) {
+      setAutenticado(true);
+      localStorage.setItem('sesion_conserje_activa', 'true');
+      setErrorPassword('');
+      setPasswordInput('');
+    } else {
+      setErrorPassword('Contraseña incorrecta. Intenta nuevamente.');
+    }
+  };
+
+  // Logout / Cerrar Sesión
+  const cerrarSesion = () => {
+    if (confirm('¿Estás seguro de que deseas cerrar sesión / terminar el turno?')) {
+      localStorage.removeItem('sesion_conserje_activa');
+      const nuevaHora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      localStorage.setItem('horaTurnoInicio', nuevaHora);
+      setHoraTurnoInicio(nuevaHora);
+      setAutenticado(false);
+    }
+  };
+
+  // Registrar nuevo ingreso
   const registrarIngreso = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!patente.trim() || !depto.trim()) {
@@ -114,9 +156,7 @@ export default function ConsergeriaPage() {
       nombre_visita: nombre.trim() || 'Sin Nombre',
       rut_visita: rut.trim() || 'Sin RUT',
       depto_destino: depto.trim(),
-      fecha_ingreso: new Date().toISOString(),
-      estado_pago: 'GRATIS',
-      monto_pagado: 0
+      fecha_ingreso: new Date().toISOString()
     };
 
     const { error } = await supabase.from('registros_estacionamiento').insert([nuevoRegistro]);
@@ -158,14 +198,43 @@ export default function ConsergeriaPage() {
     else alert('Error marcando salida: ' + error.message);
   };
 
-  const reiniciarTurno = () => {
-    if (confirm('¿Deseas cerrar la sesión / reiniciar el turno actual?')) {
-      const nuevaHora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-      setHoraTurnoInicio(nuevaHora);
-      localStorage.setItem('horaTurnoInicio', nuevaHora);
-      window.location.reload();
-    }
-  };
+  // Vista de Login si no está autenticado
+  if (!autenticado) {
+    return (
+      <div className="min-h-screen bg-[#1a3b8b] flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center space-y-6">
+          <div className="text-5xl">🏢</div>
+          <div>
+            <h1 className="text-2xl font-black text-slate-800">Control de Estacionamiento</h1>
+            <p className="text-sm text-slate-500 mt-1">Ingresa el PIN de Conserjería</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <input
+              type="password"
+              placeholder="Contraseña (Ej: 1234)"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              className="w-full text-center tracking-widest text-2xl font-bold p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+              autoFocus
+              required
+            />
+
+            {errorPassword && (
+              <p className="text-xs text-red-600 font-semibold">{errorPassword}</p>
+            )}
+
+            <button
+              type="submit"
+              className="w-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-extrabold py-3.5 px-4 rounded-xl shadow transition-colors text-base"
+            >
+              Entrar al Sistema
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   // Totales
   const totalEfectivo = registros
@@ -214,10 +283,10 @@ export default function ConsergeriaPage() {
             <p className="text-blue-200 text-xs mt-1">Inicio Turno: {horaTurnoInicio} hrs</p>
           </div>
           <button
-            onClick={reiniciarTurno}
+            onClick={cerrarSesion}
             className="mt-3 md:mt-0 bg-[#f59e0b] hover:bg-[#d97706] text-white text-xs font-bold py-2.5 px-4 rounded-lg shadow transition-colors flex items-center gap-1.5 cursor-pointer"
           >
-            📋 Cerrar Sesión / Nuevo Turno
+            🔒 Cerrar Sesión / Nuevo Turno
           </button>
         </div>
 
