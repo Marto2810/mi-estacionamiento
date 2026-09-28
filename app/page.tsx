@@ -6,16 +6,17 @@ import { supabase } from '@/lib/supabase';
 // Clave para ingresar al sistema de Conserjería
 const CLAVE_ACCESO = '1234';
 
-const TORRES = ['Torre 1', 'Torre 2', 'Torre 3', 'Torre 4', 'Torre 5', 'Torre 6'] as const;
-
-const DEPARTAMENTOS_POR_TORRE: Record<(typeof TORRES)[number], string[]> = {
-  'Torre 1': ['101', '102', '103', '104', '105', '106', '107', '108', '109', '110'],
-  'Torre 2': ['201', '202', '203', '204', '205', '206', '207', '208', '209', '210'],
-  'Torre 3': ['301', '302', '303', '304', '305', '306', '307', '308', '309', '310'],
-  'Torre 4': ['401', '402', '403', '404', '405', '406', '407', '408', '409', '410'],
-  'Torre 5': ['501', '502', '503', '504', '505', '506', '507', '508', '509', '510', '511', '512'],
-  'Torre 6': ['601', '602', '603', '604', '605', '606', '607', '608', '609', '610', '611', '612'],
-};
+// Generar lista fija de 64 departamentos (Ejemplo: pisos 1 al 8, dptos 01 al 08)
+const DEPARTAMENTOS_DISPONIBLES = [
+  '101', '102', '103', '104', '105', '106', '107', '108',
+  '201', '202', '203', '204', '205', '206', '207', '208',
+  '301', '302', '303', '304', '305', '306', '307', '308',
+  '401', '402', '403', '404', '405', '406', '407', '408',
+  '501', '502', '503', '504', '505', '506', '507', '508',
+  '601', '602', '603', '604', '605', '606', '607', '608',
+  '701', '702', '703', '704', '705', '706', '707', '708',
+  '801', '802', '803', '804', '805', '806', '807', '808',
+];
 
 interface Registro {
   id: string;
@@ -65,11 +66,15 @@ export default function ConsergeriaPage() {
   const [patente, setPatente] = useState('');
   const [nombre, setNombre] = useState('');
   const [rut, setRut] = useState('');
-  const [torre, setTorre] = useState<(typeof TORRES)[number] | ''>('');
-  const [depto, setDepto] = useState('');
+  
+  // Estados para selección de Torre y Departamento
+  const [torre, setTorre] = useState('');
+  const [deptoNum, setDeptoNum] = useState('');
+  const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
+
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | 'GRATIS' | 'PENDIENTE' | 'PAGADO'>('TODOS');
-  const [filtroFecha, setFiltroFecha] = useState<string>(''); // Nuevo filtro de fecha para historial
+  const [filtroFecha, setFiltroFecha] = useState<string>('');
   const [pestañaActiva, setPestañaActiva] = useState<'ACTIVOS' | 'HISTORIAL'>('ACTIVOS');
   const [horaTurnoInicio, setHoraTurnoInicio] = useState('');
   const [cargando, setCargando] = useState(false);
@@ -155,31 +160,32 @@ export default function ConsergeriaPage() {
     }
   };
 
-  // Registrar nuevo ingreso
-  const departamentosValidos = torre ? DEPARTAMENTOS_POR_TORRE[torre] : [];
-  const opcionesDepartamento = depto.trim()
-    ? departamentosValidos.filter((numero) => numero.startsWith(depto.trim()))
-    : departamentosValidos;
+  // Filtrar departamentos según lo que el usuario escribe
+  const deptosFiltrados = DEPARTAMENTOS_DISPONIBLES.filter((dpto) =>
+    dpto.includes(deptoNum.trim())
+  );
 
+  // Registrar nuevo ingreso
   const registrarIngreso = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patente.trim() || !torre || !depto.trim()) {
-      alert('Ingresa la Patente, la Torre y el Número de Departamento.');
+    if (!patente.trim() || !torre || !deptoNum.trim()) {
+      alert('Selecciona la Torre e ingresa la Patente y Departamento.');
       return;
     }
 
-    const deptoValido = departamentosValidos.includes(depto.trim());
-    if (!deptoValido) {
-      alert(`El departamento ${depto.trim()} no existe en ${torre}.`);
+    if (!DEPARTAMENTOS_DISPONIBLES.includes(deptoNum.trim())) {
+      alert('El departamento ingresado no es válido. Selecciona uno de la lista.');
       return;
     }
 
     setCargando(true);
+    const deptoCompleto = `${torre} - Depto ${deptoNum.trim()}`;
+
     const nuevoRegistro = {
       patente: patente.toUpperCase().replace(/[^A-Z0-9]/g, ''),
       nombre_visita: nombre.trim() || 'Sin Nombre',
       rut_visita: rut.trim() || 'Sin RUT',
-      depto_destino: `${torre} - ${depto.trim()}`,
+      depto_destino: deptoCompleto,
       fecha_ingreso: new Date().toISOString()
     };
 
@@ -189,7 +195,9 @@ export default function ConsergeriaPage() {
       setPatente('');
       setNombre('');
       setRut('');
-      setDepto('');
+      setTorre('');
+      setDeptoNum('');
+      setMostrarSugerencias(false);
       await obtenerRegistros();
     } else {
       alert('Error de Supabase: ' + error.message);
@@ -291,7 +299,6 @@ export default function ConsergeriaPage() {
 
     const coincideEstado = filtroEstado === 'TODOS' || estadoReal === filtroEstado;
 
-    // Filtro por Fecha de salida/ingreso en Historial
     let coincideFecha = true;
     if (pestañaActiva === 'HISTORIAL' && filtroFecha) {
       const fechaComparar = r.fecha_salida ? new Date(r.fecha_salida) : new Date(r.fecha_ingreso);
@@ -374,89 +381,101 @@ export default function ConsergeriaPage() {
         {pestañaActiva === 'ACTIVOS' && (
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <h2 className="text-base font-bold text-slate-800 mb-3">Registrar Nuevo Ingreso</h2>
-            <form onSubmit={registrarIngreso} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-                <input
-                  type="text"
-                  placeholder="PATENTE (EJ: BBC)"
-                  value={patente}
-                  onChange={(e) => setPatente(e.target.value)}
-                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase font-semibold text-sm text-slate-800"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Nombre Visita"
-                  value={nombre}
-                  onChange={(e) => setNombre(e.target.value)}
-                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-                />
-                <input
-                  type="text"
-                  placeholder="RUT Visita"
-                  value={rut}
-                  onChange={(e) => setRut(e.target.value)}
-                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-                />
-                <select
-                  value={torre}
-                  onChange={(e) => {
-                    const nuevaTorre = e.target.value as (typeof TORRES)[number] | '';
-                    setTorre(nuevaTorre);
-                    setDepto('');
-                  }}
-                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-                  required
-                >
-                  <option value="">Selecciona torre</option>
-                  {TORRES.map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  placeholder="Depto / Casa"
-                  value={depto}
-                  onChange={(e) => setDepto(e.target.value.replace(/[^0-9]/g, '').slice(0, 3))}
-                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-                  disabled={!torre}
-                  required
-                />
-              </div>
+            <form onSubmit={registrarIngreso} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
+              
+              {/* Patente */}
+              <input
+                type="text"
+                placeholder="PATENTE (EJ: BBC)"
+                value={patente}
+                onChange={(e) => setPatente(e.target.value)}
+                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase font-semibold text-sm text-slate-800"
+                required
+              />
 
-              {torre && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">
-                    Departamentos válidos para {torre}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {opcionesDepartamento.length > 0 ? (
-                      opcionesDepartamento.map((numero) => (
-                        <button
-                          key={numero}
-                          type="button"
-                          onClick={() => setDepto(numero)}
-                          className="px-2.5 py-1.5 rounded-lg border border-blue-200 bg-white text-xs font-bold text-blue-700 hover:bg-blue-50 transition-colors"
+              {/* Nombre */}
+              <input
+                type="text"
+                placeholder="Nombre Visita"
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+              />
+
+              {/* RUT */}
+              <input
+                type="text"
+                placeholder="RUT Visita"
+                value={rut}
+                onChange={(e) => setRut(e.target.value)}
+                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+              />
+
+              {/* Selector de Torre */}
+              <select
+                value={torre}
+                onChange={(e) => setTorre(e.target.value)}
+                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm font-semibold text-slate-800 bg-white"
+                required
+              >
+                <option value="">-- Seleccionar Torre --</option>
+                <option value="Torre 1">Torre 1</option>
+                <option value="Torre 2">Torre 2</option>
+                <option value="Torre 3">Torre 3</option>
+                <option value="Torre 4">Torre 4</option>
+                <option value="Torre 5">Torre 5</option>
+                <option value="Torre 6">Torre 6</option>
+              </select>
+
+              {/* Departamento con Sugerencias Filtro en Vivo */}
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder={torre ? 'Escribe Depto...' : 'Primero elige Torre'}
+                  value={deptoNum}
+                  disabled={!torre}
+                  onChange={(e) => {
+                    setDeptoNum(e.target.value);
+                    setMostrarSugerencias(true);
+                  }}
+                  onFocus={() => setMostrarSugerencias(true)}
+                  className="w-full p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                  required
+                />
+
+                {/* Lista desplegable interactiva */}
+                {mostrarSugerencias && torre && (
+                  <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100">
+                    {deptosFiltrados.length > 0 ? (
+                      deptosFiltrados.map((num) => (
+                        <div
+                          key={num}
+                          onClick={() => {
+                            setDeptoNum(num);
+                            setMostrarSugerencias(false);
+                          }}
+                          className="p-2.5 text-sm font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-600 cursor-pointer transition-colors"
                         >
-                          {numero}
-                        </button>
+                          Depto {num}
+                        </div>
                       ))
                     ) : (
-                      <span className="text-xs text-slate-500">No hay departamentos válidos para la búsqueda actual.</span>
+                      <div className="p-3 text-xs text-slate-400 text-center font-medium">
+                        Departamento no existe
+                      </div>
                     )}
                   </div>
-                </div>
-              )}
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={cargando}
-                  className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
-                >
-                  {cargando ? 'Guardando...' : '+ Ingresar Vehículo'}
-                </button>
+                )}
               </div>
+
+              {/* Botón Ingresar */}
+              <button
+                type="submit"
+                disabled={cargando}
+                className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
+              >
+                {cargando ? 'Guardando...' : '+ Ingresar'}
+              </button>
             </form>
           </div>
         )}
@@ -468,14 +487,13 @@ export default function ConsergeriaPage() {
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">🔍</span>
               <input
                 type="text"
-                placeholder="Buscar por patente, depto o nombre..."
+                placeholder="Buscar por patente, torre, depto o nombre..."
                 value={busqueda}
                 onChange={(e) => setBusqueda(e.target.value)}
                 className="w-full pl-9 pr-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
               />
             </div>
 
-            {/* Filtro por fecha específico para la pestaña de Historial */}
             {pestañaActiva === 'HISTORIAL' && (
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-500 whitespace-nowrap">📅 Fecha:</span>
@@ -527,7 +545,7 @@ export default function ConsergeriaPage() {
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
                   <th className="p-3.5">Patente / Visita</th>
-                  <th className="p-3.5">Depto</th>
+                  <th className="p-3.5">Ubicación (Torre/Depto)</th>
                   <th className="p-3.5">Fecha y Entrada</th>
                   {pestañaActiva === 'HISTORIAL' && <th className="p-3.5">Hora Salida</th>}
                   <th className="p-3.5">Tiempo Perm.</th>
@@ -549,7 +567,6 @@ export default function ConsergeriaPage() {
                     const estaPagado = reg.estado_pago === 'PAGADO';
                     const requierePago = !tarifa.esGratis && !estaPagado;
                     
-                    // Formato Fecha y Hora de Entrada
                     const fechaObjIngreso = reg.fecha_ingreso ? new Date(reg.fecha_ingreso) : null;
                     const diaMesIngreso = fechaObjIngreso
                       ? fechaObjIngreso.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' })
@@ -558,7 +575,6 @@ export default function ConsergeriaPage() {
                       ? fechaObjIngreso.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
                       : '--:--';
 
-                    // Formato Hora de Salida
                     const horaSalida = reg.fecha_salida
                       ? new Date(reg.fecha_salida).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
                       : '--:--';
