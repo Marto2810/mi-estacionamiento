@@ -6,6 +6,17 @@ import { supabase } from '@/lib/supabase';
 // Clave para ingresar al sistema de Conserjería
 const CLAVE_ACCESO = '1234';
 
+const TORRES = ['Torre 1', 'Torre 2', 'Torre 3', 'Torre 4', 'Torre 5', 'Torre 6'] as const;
+
+const DEPARTAMENTOS_POR_TORRE: Record<(typeof TORRES)[number], string[]> = {
+  'Torre 1': ['101', '102', '103', '104', '105', '106', '107', '108', '109', '110'],
+  'Torre 2': ['201', '202', '203', '204', '205', '206', '207', '208', '209', '210'],
+  'Torre 3': ['301', '302', '303', '304', '305', '306', '307', '308', '309', '310'],
+  'Torre 4': ['401', '402', '403', '404', '405', '406', '407', '408', '409', '410'],
+  'Torre 5': ['501', '502', '503', '504', '505', '506', '507', '508', '509', '510', '511', '512'],
+  'Torre 6': ['601', '602', '603', '604', '605', '606', '607', '608', '609', '610', '611', '612'],
+};
+
 interface Registro {
   id: string;
   patente: string;
@@ -54,6 +65,7 @@ export default function ConsergeriaPage() {
   const [patente, setPatente] = useState('');
   const [nombre, setNombre] = useState('');
   const [rut, setRut] = useState('');
+  const [torre, setTorre] = useState<(typeof TORRES)[number] | ''>('');
   const [depto, setDepto] = useState('');
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | 'GRATIS' | 'PENDIENTE' | 'PAGADO'>('TODOS');
@@ -144,10 +156,21 @@ export default function ConsergeriaPage() {
   };
 
   // Registrar nuevo ingreso
+  const departamentosValidos = torre ? DEPARTAMENTOS_POR_TORRE[torre] : [];
+  const opcionesDepartamento = depto.trim()
+    ? departamentosValidos.filter((numero) => numero.startsWith(depto.trim()))
+    : departamentosValidos;
+
   const registrarIngreso = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patente.trim() || !depto.trim()) {
-      alert('Ingresa al menos la Patente y el Departamento.');
+    if (!patente.trim() || !torre || !depto.trim()) {
+      alert('Ingresa la Patente, la Torre y el Número de Departamento.');
+      return;
+    }
+
+    const deptoValido = departamentosValidos.includes(depto.trim());
+    if (!deptoValido) {
+      alert(`El departamento ${depto.trim()} no existe en ${torre}.`);
       return;
     }
 
@@ -156,7 +179,7 @@ export default function ConsergeriaPage() {
       patente: patente.toUpperCase().replace(/[^A-Z0-9]/g, ''),
       nombre_visita: nombre.trim() || 'Sin Nombre',
       rut_visita: rut.trim() || 'Sin RUT',
-      depto_destino: depto.trim(),
+      depto_destino: `${torre} - ${depto.trim()}`,
       fecha_ingreso: new Date().toISOString()
     };
 
@@ -351,44 +374,89 @@ export default function ConsergeriaPage() {
         {pestañaActiva === 'ACTIVOS' && (
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <h2 className="text-base font-bold text-slate-800 mb-3">Registrar Nuevo Ingreso</h2>
-            <form onSubmit={registrarIngreso} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-              <input
-                type="text"
-                placeholder="PATENTE (EJ: BBC)"
-                value={patente}
-                onChange={(e) => setPatente(e.target.value)}
-                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase font-semibold text-sm text-slate-800"
-                required
-              />
-              <input
-                type="text"
-                placeholder="Nombre Visita"
-                value={nombre}
-                onChange={(e) => setNombre(e.target.value)}
-                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-              />
-              <input
-                type="text"
-                placeholder="RUT Visita"
-                value={rut}
-                onChange={(e) => setRut(e.target.value)}
-                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-              />
-              <input
-                type="text"
-                placeholder="Depto / Casa"
-                value={depto}
-                onChange={(e) => setDepto(e.target.value)}
-                className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
-                required
-              />
-              <button
-                type="submit"
-                disabled={cargando}
-                className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
-              >
-                {cargando ? 'Guardando...' : '+ Ingresar Vehículo'}
-              </button>
+            <form onSubmit={registrarIngreso} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                <input
+                  type="text"
+                  placeholder="PATENTE (EJ: BBC)"
+                  value={patente}
+                  onChange={(e) => setPatente(e.target.value)}
+                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase font-semibold text-sm text-slate-800"
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Nombre Visita"
+                  value={nombre}
+                  onChange={(e) => setNombre(e.target.value)}
+                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+                />
+                <input
+                  type="text"
+                  placeholder="RUT Visita"
+                  value={rut}
+                  onChange={(e) => setRut(e.target.value)}
+                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+                />
+                <select
+                  value={torre}
+                  onChange={(e) => {
+                    const nuevaTorre = e.target.value as (typeof TORRES)[number] | '';
+                    setTorre(nuevaTorre);
+                    setDepto('');
+                  }}
+                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+                  required
+                >
+                  <option value="">Selecciona torre</option>
+                  {TORRES.map((item) => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  placeholder="Depto / Casa"
+                  value={depto}
+                  onChange={(e) => setDepto(e.target.value.replace(/[^0-9]/g, '').slice(0, 3))}
+                  className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+                  disabled={!torre}
+                  required
+                />
+              </div>
+
+              {torre && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">
+                    Departamentos válidos para {torre}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {opcionesDepartamento.length > 0 ? (
+                      opcionesDepartamento.map((numero) => (
+                        <button
+                          key={numero}
+                          type="button"
+                          onClick={() => setDepto(numero)}
+                          className="px-2.5 py-1.5 rounded-lg border border-blue-200 bg-white text-xs font-bold text-blue-700 hover:bg-blue-50 transition-colors"
+                        >
+                          {numero}
+                        </button>
+                      ))
+                    ) : (
+                      <span className="text-xs text-slate-500">No hay departamentos válidos para la búsqueda actual.</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={cargando}
+                  className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
+                >
+                  {cargando ? 'Guardando...' : '+ Ingresar Vehículo'}
+                </button>
+              </div>
             </form>
           </div>
         )}
