@@ -19,13 +19,13 @@ interface Registro {
   metodo_pago?: string | null;
 }
 
-function calcularTarifaActual(fechaIngresoStr: string) {
+function calcularTarifaActual(fechaIngresoStr: string, fechaSalidaStr?: string | null) {
   if (!fechaIngresoStr) {
     return { monto: 0, horas: 0, minutos: 0, esGratis: true };
   }
   const ingreso = new Date(fechaIngresoStr);
-  const ahora = new Date();
-  const diffMilisegundos = Math.max(0, ahora.getTime() - ingreso.getTime());
+  const limite = fechaSalidaStr ? new Date(fechaSalidaStr) : new Date();
+  const diffMilisegundos = Math.max(0, limite.getTime() - ingreso.getTime());
   
   const horasTotales = Math.max(1, Math.ceil(diffMilisegundos / (1000 * 60 * 60)));
   const horasTranscurridas = Math.floor(diffMilisegundos / (1000 * 60 * 60));
@@ -57,6 +57,7 @@ export default function ConsergeriaPage() {
   const [depto, setDepto] = useState('');
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | 'GRATIS' | 'PENDIENTE' | 'PAGADO'>('TODOS');
+  const [filtroFecha, setFiltroFecha] = useState<string>(''); // Nuevo filtro de fecha para historial
   const [pestañaActiva, setPestañaActiva] = useState<'ACTIVOS' | 'HISTORIAL'>('ACTIVOS');
   const [horaTurnoInicio, setHoraTurnoInicio] = useState('');
   const [cargando, setCargando] = useState(false);
@@ -174,7 +175,7 @@ export default function ConsergeriaPage() {
   };
 
   const marcarComoPagado = async (registro: Registro, metodo: 'EFECTIVO' | 'TRANSFERENCIA') => {
-    const tarifa = calcularTarifaActual(registro.fecha_ingreso);
+    const tarifa = calcularTarifaActual(registro.fecha_ingreso, registro.fecha_salida);
     const { error } = await supabase
       .from('registros_estacionamiento')
       .update({
@@ -259,7 +260,7 @@ export default function ConsergeriaPage() {
       (r.depto_destino && r.depto_destino.toLowerCase().includes(term)) ||
       (r.nombre_visita && r.nombre_visita.toLowerCase().includes(term));
 
-    const tarifa = calcularTarifaActual(r.fecha_ingreso);
+    const tarifa = calcularTarifaActual(r.fecha_ingreso, r.fecha_salida);
     let estadoReal: 'GRATIS' | 'PENDIENTE' | 'PAGADO' = r.estado_pago || 'GRATIS';
     if (r.estado_pago !== 'PAGADO') {
       estadoReal = tarifa.esGratis ? 'GRATIS' : 'PENDIENTE';
@@ -267,7 +268,15 @@ export default function ConsergeriaPage() {
 
     const coincideEstado = filtroEstado === 'TODOS' || estadoReal === filtroEstado;
 
-    return coincideBusqueda && coincideEstado;
+    // Filtro por Fecha de salida/ingreso en Historial
+    let coincideFecha = true;
+    if (pestañaActiva === 'HISTORIAL' && filtroFecha) {
+      const fechaComparar = r.fecha_salida ? new Date(r.fecha_salida) : new Date(r.fecha_ingreso);
+      const fechaISO = fechaComparar.toISOString().split('T')[0];
+      coincideFecha = fechaISO === filtroFecha;
+    }
+
+    return coincideBusqueda && coincideEstado && coincideFecha;
   });
 
   return (
@@ -386,15 +395,38 @@ export default function ConsergeriaPage() {
 
         {/* Filtros */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 space-y-3">
-          <div className="relative">
-            <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">🔍</span>
-            <input
-              type="text"
-              placeholder="Buscar por patente, depto o nombre..."
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-              className="w-full pl-9 pr-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-            />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="relative md:col-span-2">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">🔍</span>
+              <input
+                type="text"
+                placeholder="Buscar por patente, depto o nombre..."
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                className="w-full pl-9 pr-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+              />
+            </div>
+
+            {/* Filtro por fecha específico para la pestaña de Historial */}
+            {pestañaActiva === 'HISTORIAL' && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-500 whitespace-nowrap">📅 Fecha:</span>
+                <input
+                  type="date"
+                  value={filtroFecha}
+                  onChange={(e) => setFiltroFecha(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
+                />
+                {filtroFecha && (
+                  <button
+                    onClick={() => setFiltroFecha('')}
+                    className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-600 font-bold px-2.5 py-2 rounded-lg"
+                  >
+                    Borrar
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2">
@@ -416,7 +448,7 @@ export default function ConsergeriaPage() {
 
         {/* Tabla */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-4 border-b border-slate-100">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center">
             <h2 className="text-base font-bold text-slate-800">
               {pestañaActiva === 'ACTIVOS' ? 'Vehículos Estacionados' : 'Historial de Salidas'}
             </h2>
@@ -428,7 +460,8 @@ export default function ConsergeriaPage() {
                 <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
                   <th className="p-3.5">Patente / Visita</th>
                   <th className="p-3.5">Depto</th>
-                  <th className="p-3.5">Hora Llegada</th>
+                  <th className="p-3.5">Fecha y Entrada</th>
+                  {pestañaActiva === 'HISTORIAL' && <th className="p-3.5">Hora Salida</th>}
                   <th className="p-3.5">Tiempo Perm.</th>
                   <th className="p-3.5">Monto</th>
                   <th className="p-3.5">Estado Pago</th>
@@ -438,20 +471,28 @@ export default function ConsergeriaPage() {
               <tbody className="divide-y divide-slate-100 text-sm">
                 {registrosFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-slate-400 font-medium">
+                    <td colSpan={8} className="p-8 text-center text-slate-400 font-medium">
                       No hay registros disponibles.
                     </td>
                   </tr>
                 ) : (
                   registrosFiltrados.map((reg) => {
-                    const tarifa = calcularTarifaActual(reg.fecha_ingreso);
+                    const tarifa = calcularTarifaActual(reg.fecha_ingreso, reg.fecha_salida);
                     const estaPagado = reg.estado_pago === 'PAGADO';
                     const requierePago = !tarifa.esGratis && !estaPagado;
-                    const horaLlegada = reg.fecha_ingreso
-                      ? new Date(reg.fecha_ingreso).toLocaleTimeString('es-CL', {
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })
+                    
+                    // Formato Fecha y Hora de Entrada
+                    const fechaObjIngreso = reg.fecha_ingreso ? new Date(reg.fecha_ingreso) : null;
+                    const diaMesIngreso = fechaObjIngreso
+                      ? fechaObjIngreso.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' })
+                      : '--/--';
+                    const horaIngreso = fechaObjIngreso
+                      ? fechaObjIngreso.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
+                      : '--:--';
+
+                    // Formato Hora de Salida
+                    const horaSalida = reg.fecha_salida
+                      ? new Date(reg.fecha_salida).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
                       : '--:--';
 
                     return (
@@ -461,7 +502,14 @@ export default function ConsergeriaPage() {
                           <div className="text-xs text-slate-400">{reg.nombre_visita || reg.rut_visita || '-'}</div>
                         </td>
                         <td className="p-3.5 font-bold text-slate-700">{reg.depto_destino}</td>
-                        <td className="p-3.5 text-slate-600 font-medium">{horaLlegada} hrs</td>
+                        <td className="p-3.5 text-slate-600 font-medium">
+                          <span className="font-bold text-slate-800">{diaMesIngreso}</span> a las {horaIngreso} hrs
+                        </td>
+                        {pestañaActiva === 'HISTORIAL' && (
+                          <td className="p-3.5 text-slate-600 font-medium">
+                            {horaSalida} hrs
+                          </td>
+                        )}
                         <td className="p-3.5 text-slate-600 font-medium">
                           {tarifa.horas}h {tarifa.minutos}m
                         </td>
