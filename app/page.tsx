@@ -6,7 +6,10 @@ import { supabase } from '@/lib/supabase';
 // Clave para ingresar al sistema de Conserjería
 const CLAVE_ACCESO = '1234';
 
-// Generar lista fija de 64 departamentos (Ejemplo: pisos 1 al 8, dptos 01 al 08)
+// Límite total de estacionamientos disponibles
+const TOTAL_ESTACIONAMIENTOS = 13;
+
+// Generar lista fija de 64 departamentos (pisos 1 al 8, dptos 01 al 08)
 const DEPARTAMENTOS_DISPONIBLES = [
   '101', '102', '103', '104', '105', '106', '107', '108',
   '201', '202', '203', '204', '205', '206', '207', '208',
@@ -71,6 +74,12 @@ export default function ConsergeriaPage() {
   const [torre, setTorre] = useState('');
   const [deptoNum, setDeptoNum] = useState('');
   const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
+
+  // Estados para Modal de Edición en Historial
+  const [registroEditando, setRegistroEditando] = useState<Registro | null>(null);
+  const [nuevoEstadoPago, setNuevoEstadoPago] = useState<'GRATIS' | 'PENDIENTE' | 'PAGADO'>('PAGADO');
+  const [nuevoMetodoPago, setNuevoMetodoPago] = useState('EFECTIVO');
+  const [nuevoMontoPagado, setNuevoMontoPagado] = useState(0);
 
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | 'GRATIS' | 'PENDIENTE' | 'PAGADO'>('TODOS');
@@ -178,6 +187,13 @@ export default function ConsergeriaPage() {
       return;
     }
 
+    // Validar si hay estacionamientos disponibles
+    const autosActivosCount = registros.filter((r) => r && !r.fecha_salida).length;
+    if (autosActivosCount >= TOTAL_ESTACIONAMIENTOS) {
+      alert('⚠️ No hay estacionamientos disponibles (Límite de 13 alcanzado).');
+      return;
+    }
+
     setCargando(true);
     const deptoCompleto = `${torre} - Depto ${deptoNum.trim()}`;
 
@@ -230,6 +246,28 @@ export default function ConsergeriaPage() {
     else alert('Error marcando salida: ' + error.message);
   };
 
+  // Guardar cambios de edición de pago desde el historial
+  const guardarEdicionHistorial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!registroEditando) return;
+
+    const { error } = await supabase
+      .from('registros_estacionamiento')
+      .update({
+        estado_pago: nuevoEstadoPago,
+        monto_pagado: nuevoEstadoPago === 'PAGADO' ? Number(nuevoMontoPagado) : 0,
+        metodo_pago: nuevoEstadoPago === 'PAGADO' ? nuevoMetodoPago : null
+      })
+      .eq('id', registroEditando.id);
+
+    if (!error) {
+      setRegistroEditando(null);
+      obtenerRegistros();
+    } else {
+      alert('Error al actualizar el historial: ' + error.message);
+    }
+  };
+
   // Vista de Login si no está autenticado
   if (!autenticado) {
     return (
@@ -278,6 +316,10 @@ export default function ConsergeriaPage() {
     .reduce((acc, r) => acc + (r.monto_pagado || 0), 0);
 
   const totalRecaudado = totalEfectivo + totalTransferencias;
+
+  // Cálculo de Disponibilidad de Estacionamientos
+  const autosActivosCount = registros.filter((r) => r && !r.fecha_salida).length;
+  const estacionamientosLibres = Math.max(0, TOTAL_ESTACIONAMIENTOS - autosActivosCount);
 
   const listaBase = registros.filter((r) => {
     if (!r) return false;
@@ -329,27 +371,54 @@ export default function ConsergeriaPage() {
           </button>
         </div>
 
+        {/* Indicador de Disponibilidad de Estacionamientos (13 Totales) */}
+        <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row justify-between items-center gap-3 shadow-sm ${
+          estacionamientosLibres === 0 
+            ? 'bg-red-50 border-red-200 text-red-900' 
+            : estacionamientosLibres <= 3 
+            ? 'bg-amber-50 border-amber-200 text-amber-900' 
+            : 'bg-white border-slate-100 text-slate-800'
+        }`}>
+          <div className="flex items-center gap-3">
+            <span className="text-3xl">🅿️</span>
+            <div>
+              <h2 className="text-sm font-black uppercase tracking-wider">Disponibilidad de Estacionamientos de Visitas</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Capacidad total: {TOTAL_ESTACIONAMIENTOS} espacios</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-center">
+            <div className="bg-slate-100 px-3 py-1.5 rounded-xl">
+              <span className="text-[10px] font-bold text-slate-500 block">OCUPADOS</span>
+              <span className="text-lg font-black text-slate-800">{autosActivosCount}</span>
+            </div>
+            <div className={`px-4 py-1.5 rounded-xl ${estacionamientosLibres === 0 ? 'bg-red-600 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
+              <span className="text-[10px] font-bold block opacity-80">DISPONIBLES</span>
+              <span className="text-lg font-black">{estacionamientosLibres} / {TOTAL_ESTACIONAMIENTOS}</span>
+            </div>
+          </div>
+        </div>
+
         {/* Tarjetas de Dinero */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-[#eefcf5] border border-[#a7f3d0] p-4 rounded-2xl shadow-sm">
             <span className="text-xs font-bold text-[#065f46] uppercase tracking-wider flex items-center gap-1">
               💵 TOTAL EFECTIVO TURNO
             </span>
-            <p className="text-3xl font-black text-[#047857] mt-1">${totalEfectivo.toLocaleString('es-CL')}</p>
+            <p className="text-3xl font-black text-[#047857] mt-1">\${totalEfectivo.toLocaleString('es-CL')}</p>
           </div>
 
           <div className="bg-[#faeefc] border border-[#f0abfc] p-4 rounded-2xl shadow-sm">
             <span className="text-xs font-bold text-[#701a75] uppercase tracking-wider flex items-center gap-1">
               🏛️ TOTAL TRANSFERENCIAS TURNO
             </span>
-            <p className="text-3xl font-black text-[#86198f] mt-1">${totalTransferencias.toLocaleString('es-CL')}</p>
+            <p className="text-3xl font-black text-[#86198f] mt-1">\${totalTransferencias.toLocaleString('es-CL')}</p>
           </div>
 
           <div className="bg-[#eff6ff] border border-[#bfdbfe] p-4 rounded-2xl shadow-sm">
             <span className="text-xs font-bold text-[#1e40af] uppercase tracking-wider flex items-center gap-1">
               💰 TOTAL RECAUDADO TURNO
             </span>
-            <p className="text-3xl font-black text-[#1d4ed8] mt-1">${totalRecaudado.toLocaleString('es-CL')}</p>
+            <p className="text-3xl font-black text-[#1d4ed8] mt-1">\${totalRecaudado.toLocaleString('es-CL')}</p>
           </div>
         </div>
 
@@ -383,7 +452,6 @@ export default function ConsergeriaPage() {
             <h2 className="text-base font-bold text-slate-800 mb-3">Registrar Nuevo Ingreso</h2>
             <form onSubmit={registrarIngreso} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
               
-              {/* Patente */}
               <input
                 type="text"
                 placeholder="PATENTE (EJ: BBC)"
@@ -393,7 +461,6 @@ export default function ConsergeriaPage() {
                 required
               />
 
-              {/* Nombre */}
               <input
                 type="text"
                 placeholder="Nombre Visita"
@@ -402,7 +469,6 @@ export default function ConsergeriaPage() {
                 className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
               />
 
-              {/* RUT */}
               <input
                 type="text"
                 placeholder="RUT Visita"
@@ -411,7 +477,6 @@ export default function ConsergeriaPage() {
                 className="p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-800"
               />
 
-              {/* Selector de Torre */}
               <select
                 value={torre}
                 onChange={(e) => setTorre(e.target.value)}
@@ -427,7 +492,6 @@ export default function ConsergeriaPage() {
                 <option value="Torre 6">Torre 6</option>
               </select>
 
-              {/* Departamento con Sugerencias Filtro en Vivo */}
               <div className="relative">
                 <input
                   type="text"
@@ -443,7 +507,6 @@ export default function ConsergeriaPage() {
                   required
                 />
 
-                {/* Lista desplegable interactiva */}
                 {mostrarSugerencias && torre && (
                   <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100">
                     {deptosFiltrados.length > 0 ? (
@@ -468,11 +531,10 @@ export default function ConsergeriaPage() {
                 )}
               </div>
 
-              {/* Botón Ingresar */}
               <button
                 type="submit"
-                disabled={cargando}
-                className="bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
+                disabled={cargando || estacionamientosLibres === 0}
+                className="bg-[#2563eb] hover:bg-[#1d4ed8] disabled:bg-slate-300 text-white font-bold py-3 px-4 rounded-xl shadow transition-colors text-sm cursor-pointer"
               >
                 {cargando ? 'Guardando...' : '+ Ingresar'}
               </button>
@@ -598,7 +660,7 @@ export default function ConsergeriaPage() {
                           {tarifa.horas}h {tarifa.minutos}m
                         </td>
                         <td className="p-3.5 font-extrabold text-slate-800">
-                          ${estaPagado ? (reg.monto_pagado || 0).toLocaleString('es-CL') : tarifa.monto.toLocaleString('es-CL')}
+                          \${estaPagado ? (reg.monto_pagado || 0).toLocaleString('es-CL') : tarifa.monto.toLocaleString('es-CL')}
                         </td>
                         <td className="p-3.5">
                           {estaPagado ? (
@@ -642,6 +704,20 @@ export default function ConsergeriaPage() {
                               </button>
                             </>
                           )}
+
+                          {pestañaActiva === 'HISTORIAL' && (
+                            <button
+                              onClick={() => {
+                                setRegistroEditando(reg);
+                                setNuevoEstadoPago(reg.estado_pago || 'PAGADO');
+                                setNuevoMetodoPago(reg.metodo_pago || 'EFECTIVO');
+                                setNuevoMontoPagado(reg.monto_pagado || tarifa.monto);
+                              }}
+                              className="bg-blue-100 hover:bg-blue-200 text-blue-800 text-xs font-bold px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                            >
+                              Editar Pago
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -653,6 +729,84 @@ export default function ConsergeriaPage() {
         </div>
 
       </div>
+
+      {/* MODAL PARA EDITAR PAGO DESDE EL HISTORIAL */}
+      {registroEditando && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md space-y-4">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-extrabold text-base text-slate-800">
+                Editar Estado de Pago - Patente: {registroEditando.patente}
+              </h3>
+              <button
+                onClick={() => setRegistroEditando(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={guardarEdicionHistorial} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Estado de Pago</label>
+                <select
+                  value={nuevoEstadoPago}
+                  onChange={(e) => setNuevoEstadoPago(e.target.value as any)}
+                  className="w-full p-2.5 border rounded-xl font-bold text-sm bg-white"
+                >
+                  <option value="PAGADO">PAGADO</option>
+                  <option value="PENDIENTE">PENDIENTE</option>
+                  <option value="GRATIS">GRATIS</option>
+                </select>
+              </div>
+
+              {nuevoEstadoPago === 'PAGADO' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Método de Pago</label>
+                    <select
+                      value={nuevoMetodoPago}
+                      onChange={(e) => setNuevoMetodoPago(e.target.value)}
+                      className="w-full p-2.5 border rounded-xl font-bold text-sm bg-white"
+                    >
+                      <option value="EFECTIVO">EFECTIVO</option>
+                      <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                      <option value="WEBPAY">WEBPAY</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Monto Pagado (\$)</label>
+                    <input
+                      type="number"
+                      value={nuevoMontoPagado}
+                      onChange={(e) => setNuevoMontoPagado(Number(e.target.value))}
+                      className="w-full p-2.5 border rounded-xl font-bold text-sm"
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRegistroEditando(null)}
+                  className="w-1/2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-sm"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="w-1/2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-sm"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
