@@ -3,23 +3,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
-// Clave para ingresar al sistema de Conserjería
-const CLAVE_ACCESO = '1234';
+// Clave para ingresar al sistema (idealmente configurada en el archivo .env.local)
+const CLAVE_ACCESO = process.env.NEXT_PUBLIC_CLAVE_ACCESO || '1234';
 
 // Límite total de estacionamientos disponibles
 const TOTAL_ESTACIONAMIENTOS = 13;
-
-// Generar lista fija de 64 departamentos (pisos 1 al 8, dptos 01 al 08)
-const DEPARTAMENTOS_DISPONIBLES = [
-  '101', '102', '103', '104', '105', '106', '107', '108',
-  '201', '202', '203', '204', '205', '206', '207', '208',
-  '301', '302', '303', '304', '305', '306', '307', '308',
-  '401', '402', '403', '404', '405', '406', '407', '408',
-  '501', '502', '503', '504', '505', '506', '507', '508',
-  '601', '602', '603', '604', '605', '606', '607', '608',
-  '701', '702', '703', '704', '705', '706', '707', '708',
-  '801', '802', '803', '804', '805', '806', '807', '808',
-];
 
 interface Registro {
   id: string;
@@ -34,6 +22,7 @@ interface Registro {
   metodo_pago?: string | null;
 }
 
+// Cálculo de Tarifa con 15 minutos de gracia
 function calcularTarifaActual(fechaIngresoStr: string, fechaSalidaStr?: string | null) {
   if (!fechaIngresoStr) {
     return { monto: 0, horas: 0, minutos: 0, esGratis: true };
@@ -42,21 +31,33 @@ function calcularTarifaActual(fechaIngresoStr: string, fechaSalidaStr?: string |
   const limite = fechaSalidaStr ? new Date(fechaSalidaStr) : new Date();
   const diffMilisegundos = Math.max(0, limite.getTime() - ingreso.getTime());
   
-  const horasTotales = Math.max(1, Math.ceil(diffMilisegundos / (1000 * 60 * 60)));
-  const horasTranscurridas = Math.floor(diffMilisegundos / (1000 * 60 * 60));
-  const minutosTranscurridos = Math.floor((diffMilisegundos % (1000 * 60 * 60)) / (1000 * 60));
+  const minutosTotales = Math.floor(diffMilisegundos / (1000 * 60));
+  const horasTranscurridas = Math.floor(minutosTotales / 60);
+  const minutosTranscurridos = minutosTotales % 60;
 
+  // 4 horas = 240 minutos. Con 15 mins de gracia = 255 minutos.
+  let esGratis = minutosTotales <= 255;
   let monto = 0;
-  if (horasTotales > 4) {
-    const horasExtras = horasTotales - 4;
-    monto = Math.min(horasExtras * 500, 5000);
+
+  if (!esGratis) {
+    // Descontamos las 4 horas iniciales gratuitas (240 minutos)
+    const minutosExtras = minutosTotales - 240;
+    
+    // Cada hora extra se cobra entera si supera los 15 minutos de gracia
+    const horasExtras = Math.ceil((minutosExtras - 15) / 60);
+    
+    if (horasExtras > 0) {
+      monto = Math.min(horasExtras * 500, 5000);
+    } else {
+      esGratis = true; 
+    }
   }
 
   return {
     monto,
     horas: horasTranscurridas,
     minutos: minutosTranscurridos,
-    esGratis: horasTotales <= 4
+    esGratis
   };
 }
 
@@ -70,12 +71,9 @@ export default function ConsergeriaPage() {
   const [nombre, setNombre] = useState('');
   const [rut, setRut] = useState('');
   
-  // Estados para selección de Torre y Departamento
   const [torre, setTorre] = useState('');
   const [deptoNum, setDeptoNum] = useState('');
-  const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
 
-  // Estados para Modal de Edición en Historial
   const [registroEditando, setRegistroEditando] = useState<Registro | null>(null);
   const [nuevoEstadoPago, setNuevoEstadoPago] = useState<'GRATIS' | 'PENDIENTE' | 'PAGADO'>('PAGADO');
   const [nuevoMetodoPago, setNuevoMetodoPago] = useState('EFECTIVO');
@@ -85,7 +83,11 @@ export default function ConsergeriaPage() {
   const [filtroEstado, setFiltroEstado] = useState<'TODOS' | 'GRATIS' | 'PENDIENTE' | 'PAGADO'>('TODOS');
   const [filtroFecha, setFiltroFecha] = useState<string>('');
   const [pestañaActiva, setPestañaActiva] = useState<'ACTIVOS' | 'HISTORIAL'>('ACTIVOS');
+  
+  // Estados para inicio del turno
   const [horaTurnoInicio, setHoraTurnoInicio] = useState('');
+  const [turnoInicioISO, setTurnoInicioISO] = useState('');
+  
   const [cargando, setCargando] = useState(false);
   const [, setTick] = useState(0);
 
@@ -97,12 +99,20 @@ export default function ConsergeriaPage() {
     }
 
     const horaGuardada = localStorage.getItem('horaTurnoInicio');
-    if (horaGuardada) {
+    const isoGuardado = localStorage.getItem('turnoInicioISO');
+    
+    if (horaGuardada && isoGuardado) {
       setHoraTurnoInicio(horaGuardada);
+      setTurnoInicioISO(isoGuardado);
     } else {
-      const ahora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-      setHoraTurnoInicio(ahora);
-      localStorage.setItem('horaTurnoInicio', ahora);
+      const ahora = new Date();
+      const horaFormato = ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      const isoFormato = ahora.toISOString();
+      
+      setHoraTurnoInicio(horaFormato);
+      setTurnoInicioISO(isoFormato);
+      localStorage.setItem('horaTurnoInicio', horaFormato);
+      localStorage.setItem('turnoInicioISO', isoFormato);
     }
   }, []);
 
@@ -145,7 +155,6 @@ export default function ConsergeriaPage() {
     };
   }, [autenticado]);
 
-  // Login
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (passwordInput === CLAVE_ACCESO) {
@@ -158,23 +167,22 @@ export default function ConsergeriaPage() {
     }
   };
 
-  // Logout / Cerrar Sesión
   const cerrarSesion = () => {
     if (confirm('¿Estás seguro de que deseas cerrar sesión / terminar el turno?')) {
       localStorage.removeItem('sesion_conserje_activa');
-      const nuevaHora = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      const ahora = new Date();
+      const nuevaHora = ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+      const nuevoISO = ahora.toISOString();
+      
       localStorage.setItem('horaTurnoInicio', nuevaHora);
+      localStorage.setItem('turnoInicioISO', nuevoISO);
+      
       setHoraTurnoInicio(nuevaHora);
+      setTurnoInicioISO(nuevoISO);
       setAutenticado(false);
     }
   };
 
-  // Filtrar departamentos según lo que el usuario escribe
-  const deptosFiltrados = DEPARTAMENTOS_DISPONIBLES.filter((dpto) =>
-    dpto.includes(deptoNum.trim())
-  );
-
-  // Registrar nuevo ingreso
   const registrarIngreso = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!patente.trim() || !torre || !deptoNum.trim()) {
@@ -182,12 +190,13 @@ export default function ConsergeriaPage() {
       return;
     }
 
-    if (!DEPARTAMENTOS_DISPONIBLES.includes(deptoNum.trim())) {
-      alert('El departamento ingresado no es válido. Selecciona uno de la lista.');
+    // Validación de 3 dígitos exactamente
+    const deptoLimpio = deptoNum.trim();
+    if (!/^\d{3}$/.test(deptoLimpio)) {
+      alert('El número de departamento debe tener exactamente 3 dígitos (Ej: 101, 804).');
       return;
     }
 
-    // Validar si hay estacionamientos disponibles
     const autosActivosCount = registros.filter((r) => r && !r.fecha_salida).length;
     if (autosActivosCount >= TOTAL_ESTACIONAMIENTOS) {
       alert('⚠️ No hay estacionamientos disponibles (Límite de 13 alcanzado).');
@@ -195,7 +204,7 @@ export default function ConsergeriaPage() {
     }
 
     setCargando(true);
-    const deptoCompleto = `${torre} - Depto ${deptoNum.trim()}`;
+    const deptoCompleto = `${torre} - Depto ${deptoLimpio}`;
 
     const nuevoRegistro = {
       patente: patente.toUpperCase().replace(/[^A-Z0-9]/g, ''),
@@ -213,7 +222,6 @@ export default function ConsergeriaPage() {
       setRut('');
       setTorre('');
       setDeptoNum('');
-      setMostrarSugerencias(false);
       await obtenerRegistros();
     } else {
       alert('Error de Supabase: ' + error.message);
@@ -246,7 +254,6 @@ export default function ConsergeriaPage() {
     else alert('Error marcando salida: ' + error.message);
   };
 
-  // Guardar cambios de edición de pago desde el historial
   const guardarEdicionHistorial = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!registroEditando) return;
@@ -268,7 +275,6 @@ export default function ConsergeriaPage() {
     }
   };
 
-  // Vista de Login si no está autenticado
   if (!autenticado) {
     return (
       <div className="min-h-screen bg-[#1a3b8b] flex items-center justify-center p-4">
@@ -306,18 +312,26 @@ export default function ConsergeriaPage() {
     );
   }
 
-  // Totales
-  const totalEfectivo = registros
-    .filter((r) => r && r.estado_pago === 'PAGADO' && r.metodo_pago === 'EFECTIVO')
+  // Filtrar registros SOLO para el turno activo
+  const registrosDelTurno = registros.filter((r) => {
+    if (!r || !turnoInicioISO) return false;
+    const inicioTurnoTime = new Date(turnoInicioISO).getTime();
+    const fechaIng = new Date(r.fecha_ingreso).getTime();
+    const fechaSal = r.fecha_salida ? new Date(r.fecha_salida).getTime() : 0;
+    
+    return fechaIng >= inicioTurnoTime || fechaSal >= inicioTurnoTime;
+  });
+
+  const totalEfectivo = registrosDelTurno
+    .filter((r) => r.estado_pago === 'PAGADO' && r.metodo_pago === 'EFECTIVO')
     .reduce((acc, r) => acc + (r.monto_pagado || 0), 0);
 
-  const totalTransferencias = registros
-    .filter((r) => r && r.estado_pago === 'PAGADO' && (r.metodo_pago === 'TRANSFERENCIA' || r.metodo_pago === 'WEBPAY' || r.metodo_pago === 'MERCADO_PAGO'))
+  const totalTransferencias = registrosDelTurno
+    .filter((r) => r.estado_pago === 'PAGADO' && (r.metodo_pago === 'TRANSFERENCIA' || r.metodo_pago === 'WEBPAY' || r.metodo_pago === 'MERCADO_PAGO'))
     .reduce((acc, r) => acc + (r.monto_pagado || 0), 0);
 
   const totalRecaudado = totalEfectivo + totalTransferencias;
 
-  // Cálculo de Disponibilidad de Estacionamientos
   const autosActivosCount = registros.filter((r) => r && !r.fecha_salida).length;
   const estacionamientosLibres = Math.max(0, TOTAL_ESTACIONAMIENTOS - autosActivosCount);
 
@@ -355,7 +369,6 @@ export default function ConsergeriaPage() {
     <div className="min-h-screen bg-[#f1f4f9] p-4 md:p-8 font-sans text-slate-800">
       <div className="max-w-6xl mx-auto space-y-5">
         
-        {/* Encabezado Azul */}
         <div className="bg-[#1a3b8b] text-white p-5 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center shadow-md">
           <div>
             <h1 className="text-2xl font-extrabold flex items-center gap-2">
@@ -371,7 +384,6 @@ export default function ConsergeriaPage() {
           </button>
         </div>
 
-        {/* Indicador de Disponibilidad de Estacionamientos (13 Totales) */}
         <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row justify-between items-center gap-3 shadow-sm ${
           estacionamientosLibres === 0 
             ? 'bg-red-50 border-red-200 text-red-900' 
@@ -398,7 +410,6 @@ export default function ConsergeriaPage() {
           </div>
         </div>
 
-        {/* Tarjetas de Dinero */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-[#eefcf5] border border-[#a7f3d0] p-4 rounded-2xl shadow-sm">
             <span className="text-xs font-bold text-[#065f46] uppercase tracking-wider flex items-center gap-1">
@@ -422,7 +433,6 @@ export default function ConsergeriaPage() {
           </div>
         </div>
 
-        {/* Pestañas */}
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => setPestañaActiva('ACTIVOS')}
@@ -446,7 +456,6 @@ export default function ConsergeriaPage() {
           </button>
         </div>
 
-        {/* Formulario */}
         {pestañaActiva === 'ACTIVOS' && (
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
             <h2 className="text-base font-bold text-slate-800 mb-3">Registrar Nuevo Ingreso</h2>
@@ -492,44 +501,20 @@ export default function ConsergeriaPage() {
                 <option value="Torre 6">Torre 6</option>
               </select>
 
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder={torre ? 'Escribe Depto...' : 'Primero elige Torre'}
-                  value={deptoNum}
-                  disabled={!torre}
-                  onChange={(e) => {
-                    setDeptoNum(e.target.value);
-                    setMostrarSugerencias(true);
-                  }}
-                  onFocus={() => setMostrarSugerencias(true)}
-                  className="w-full p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed"
-                  required
-                />
-
-                {mostrarSugerencias && torre && (
-                  <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100">
-                    {deptosFiltrados.length > 0 ? (
-                      deptosFiltrados.map((num) => (
-                        <div
-                          key={num}
-                          onClick={() => {
-                            setDeptoNum(num);
-                            setMostrarSugerencias(false);
-                          }}
-                          className="p-2.5 text-sm font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-600 cursor-pointer transition-colors"
-                        >
-                          Depto {num}
-                        </div>
-                      ))
-                    ) : (
-                      <div className="p-3 text-xs text-slate-400 text-center font-medium">
-                        Departamento no existe
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              <input
+                type="text"
+                placeholder={torre ? 'Depto (Ej: 101)' : 'Primero elige Torre'}
+                value={deptoNum}
+                disabled={!torre}
+                maxLength={3}
+                onChange={(e) => {
+                  // Reemplazar cualquier caracter que no sea número por un string vacío
+                  const val = e.target.value.replace(/\D/g, '');
+                  setDeptoNum(val);
+                }}
+                className="w-full p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                required
+              />
 
               <button
                 type="submit"
@@ -542,7 +527,6 @@ export default function ConsergeriaPage() {
           </div>
         )}
 
-        {/* Filtros */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="relative md:col-span-2">
@@ -594,7 +578,6 @@ export default function ConsergeriaPage() {
           </div>
         </div>
 
-        {/* Tabla */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex justify-between items-center">
             <h2 className="text-base font-bold text-slate-800">
@@ -730,7 +713,6 @@ export default function ConsergeriaPage() {
 
       </div>
 
-      {/* MODAL PARA EDITAR PAGO DESDE EL HISTORIAL */}
       {registroEditando && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md space-y-4">
