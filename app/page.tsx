@@ -3,9 +3,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
-// Clave para ingresar al sistema (idealmente configurada en el archivo .env.local)
-const CLAVE_ACCESO = process.env.NEXT_PUBLIC_CLAVE_ACCESO || '1234';
-
 // Límite total de estacionamientos disponibles
 const TOTAL_ESTACIONAMIENTOS = 13;
 
@@ -35,15 +32,11 @@ function calcularTarifaActual(fechaIngresoStr: string, fechaSalidaStr?: string |
   const horasTranscurridas = Math.floor(minutosTotales / 60);
   const minutosTranscurridos = minutosTotales % 60;
 
-  // 4 horas = 240 minutos. Con 15 mins de gracia = 255 minutos.
   let esGratis = minutosTotales <= 255;
   let monto = 0;
 
   if (!esGratis) {
-    // Descontamos las 4 horas iniciales gratuitas (240 minutos)
     const minutosExtras = minutosTotales - 240;
-    
-    // Cada hora extra se cobra entera si supera los 15 minutos de gracia
     const horasExtras = Math.ceil((minutosExtras - 15) / 60);
     
     if (horasExtras > 0) {
@@ -63,8 +56,11 @@ function calcularTarifaActual(fechaIngresoStr: string, fechaSalidaStr?: string |
 
 export default function ConsergeriaPage() {
   const [autenticado, setAutenticado] = useState(false);
+  const [cargandoAuth, setCargandoAuth] = useState(true);
+  
+  const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
-  const [errorPassword, setErrorPassword] = useState('');
+  const [errorAuth, setErrorAuth] = useState('');
 
   const [registros, setRegistros] = useState<Registro[]>([]);
   const [patente, setPatente] = useState('');
@@ -84,19 +80,23 @@ export default function ConsergeriaPage() {
   const [filtroFecha, setFiltroFecha] = useState<string>('');
   const [pestañaActiva, setPestañaActiva] = useState<'ACTIVOS' | 'HISTORIAL'>('ACTIVOS');
   
-  // Estados para inicio del turno
   const [horaTurnoInicio, setHoraTurnoInicio] = useState('');
   const [turnoInicioISO, setTurnoInicioISO] = useState('');
   
   const [cargando, setCargando] = useState(false);
   const [, setTick] = useState(0);
 
-  // Verificar si hay sesión activa iniciada
+  // Verificar sesión real con Supabase al cargar la página
   useEffect(() => {
-    const sesionActiva = localStorage.getItem('sesion_conserje_activa');
-    if (sesionActiva === 'true') {
-      setAutenticado(true);
-    }
+    const verificarSesion = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setAutenticado(true);
+      }
+      setCargandoAuth(false);
+    };
+    
+    verificarSesion();
 
     const horaGuardada = localStorage.getItem('horaTurnoInicio');
     const isoGuardado = localStorage.getItem('turnoInicioISO');
@@ -155,21 +155,32 @@ export default function ConsergeriaPage() {
     };
   }, [autenticado]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  // Nuevo sistema de Login con Supabase
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordInput === CLAVE_ACCESO) {
+    setCargandoAuth(true);
+    setErrorAuth('');
+    
+    const { error } = await supabase.auth.signInWithPassword({
+      email: emailInput.trim(),
+      password: passwordInput.trim(),
+    });
+
+    if (!error) {
       setAutenticado(true);
-      localStorage.setItem('sesion_conserje_activa', 'true');
-      setErrorPassword('');
+      setEmailInput('');
       setPasswordInput('');
     } else {
-      setErrorPassword('Contraseña incorrecta. Intenta nuevamente.');
+      setErrorAuth('Correo o contraseña incorrectos.');
     }
+    setCargandoAuth(false);
   };
 
-  const cerrarSesion = () => {
+  const cerrarSesion = async () => {
     if (confirm('¿Estás seguro de que deseas cerrar sesión / terminar el turno?')) {
-      localStorage.removeItem('sesion_conserje_activa');
+      await supabase.auth.signOut();
+      setAutenticado(false);
+      
       const ahora = new Date();
       const nuevaHora = ahora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
       const nuevoISO = ahora.toISOString();
@@ -179,7 +190,6 @@ export default function ConsergeriaPage() {
       
       setHoraTurnoInicio(nuevaHora);
       setTurnoInicioISO(nuevoISO);
-      setAutenticado(false);
     }
   };
 
@@ -190,7 +200,6 @@ export default function ConsergeriaPage() {
       return;
     }
 
-    // Validación de 3 dígitos exactamente
     const deptoLimpio = deptoNum.trim();
     if (!/^\d{3}$/.test(deptoLimpio)) {
       alert('El número de departamento debe tener exactamente 3 dígitos (Ej: 101, 804).');
@@ -275,36 +284,55 @@ export default function ConsergeriaPage() {
     }
   };
 
+  // Pantalla de carga mientras verifica sesión en Supabase
+  if (cargandoAuth && !autenticado) {
+    return (
+      <div className="min-h-screen bg-[#1a3b8b] flex items-center justify-center p-4">
+        <div className="text-white font-bold animate-pulse text-lg">Cargando sistema...</div>
+      </div>
+    );
+  }
+
+  // Nueva pantalla de Login
   if (!autenticado) {
     return (
       <div className="min-h-screen bg-[#1a3b8b] flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center space-y-6">
           <div className="text-5xl">🏢</div>
           <div>
-            <h1 className="text-2xl font-black text-slate-800">Control de Estacionamiento</h1>
-            <p className="text-sm text-slate-500 mt-1">Ingresa el PIN de Conserjería</p>
+            <h1 className="text-2xl font-black text-slate-800">Acceso a Conserjería</h1>
+            <p className="text-sm text-slate-500 mt-1">Ingresa tus credenciales autorizadas</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <input
+              type="email"
+              placeholder="Correo electrónico"
+              value={emailInput}
+              onChange={(e) => setEmailInput(e.target.value)}
+              className="w-full text-center font-bold p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-slate-700"
+              required
+            />
+            
+            <input
               type="password"
-              placeholder="Contraseña (Ej: 1234)"
+              placeholder="Contraseña"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
-              className="w-full text-center tracking-widest text-2xl font-bold p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-              autoFocus
+              className="w-full text-center tracking-widest text-xl font-bold p-3 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-slate-700"
               required
             />
 
-            {errorPassword && (
-              <p className="text-xs text-red-600 font-semibold">{errorPassword}</p>
+            {errorAuth && (
+              <p className="text-xs text-red-600 font-semibold">{errorAuth}</p>
             )}
 
             <button
               type="submit"
-              className="w-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-extrabold py-3.5 px-4 rounded-xl shadow transition-colors text-base"
+              disabled={cargandoAuth}
+              className="w-full bg-[#2563eb] hover:bg-[#1d4ed8] disabled:bg-blue-300 text-white font-extrabold py-3.5 px-4 rounded-xl shadow transition-colors text-base flex justify-center items-center"
             >
-              Entrar al Sistema
+              {cargandoAuth ? 'Verificando...' : 'Iniciar Sesión'}
             </button>
           </form>
         </div>
@@ -312,7 +340,6 @@ export default function ConsergeriaPage() {
     );
   }
 
-  // Filtrar registros SOLO para el turno activo
   const registrosDelTurno = registros.filter((r) => {
     if (!r || !turnoInicioISO) return false;
     const inicioTurnoTime = new Date(turnoInicioISO).getTime();
@@ -508,7 +535,6 @@ export default function ConsergeriaPage() {
                 disabled={!torre}
                 maxLength={3}
                 onChange={(e) => {
-                  // Reemplazar cualquier caracter que no sea número por un string vacío
                   const val = e.target.value.replace(/\D/g, '');
                   setDeptoNum(val);
                 }}
